@@ -19,6 +19,7 @@ part pv.2 --size=1 --grow
 volgroup VolGroup00 --pesize=32768 pv.2
 logvol swap --fstype swap --name=LogVol01 --vgname=VolGroup00 --size=768 --grow --maxsize=1536
 logvol / --fstype ext4 --name=LogVol00 --vgname=VolGroup00 --size=1024 --grow
+%SLAVE_DISKS%
 reboot
 
 %packages
