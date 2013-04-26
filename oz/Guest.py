@@ -194,6 +194,7 @@ class Guest(object):
                                           self.tdl.distro + self.tdl.update + self.tdl.arch + '.' + jeos_extension)
 
         self.diskimage = output_disk
+        self.log.info("OZ _INIT_ OUTPUT_DIR = '%s'", self.output_dir)
         if self.diskimage is None:
             ext = "." + self.image_type
             # compatibility with older versions of Oz
@@ -201,6 +202,7 @@ class Guest(object):
                 ext = '.dsk'
             self.diskimage = os.path.join(self.output_dir, self.tdl.name + ext)
 
+        self.log.info("OZ _INIT_ DISKIMAGE = '%s'", self.diskimage)
         self.icicle_tmp = os.path.join(self.data_dir, "icicletmp",
                                        self.tdl.name)
         self.listen_port = random.randrange(1024, 65535)
@@ -469,6 +471,26 @@ class Guest(object):
         driver.setProp("name", "qemu")
         driver.setProp("type", self.image_type)
 
+        def _vd_sequence(start='a'):
+            for a in range(ord(start), ord('z') + 1):
+                yield 'vd' + chr(a)
+
+        def _add_diskdevice(fname, disk_name, devs, dev_device):
+            """
+            @param fname - on disk filename
+            """
+            _dsk = devs.newChild(None, "disk", None)
+            _dsk.setProp("type", "file")
+            _dsk.setProp("device", "disk")
+            _src = _dsk.newChild(None, "source", None)
+            _src.setProp("file", fname)
+            _tgt = _dsk.newChild(None, "target", None)
+            self.log.info("DISK DEV = "+self.disk_dev)
+            self.log.info("DISK_NAME = "+disk_name)
+            self.log.info("FNAME = "+fname)
+            _tgt.setProp("dev", dev_device) #self.disk_dev)
+            _tgt.setProp("bus", self.disk_bus)
+
         # install disk (if any)
         if installdev:
             install = devices.newChild(None, "disk", None)
@@ -479,11 +501,68 @@ class Guest(object):
             target = install.newChild(None, "target", None)
             target.setProp("dev", installdev.bus)
 
+        seq = _vd_sequence('b')
+        for nam, pth in self.slave_filenames.values():
+#            fname = pth #os.path.join(self.output_dir, dsk+'.dsk')
+            _add_diskdevice(pth, nam, devices, seq.next())
+
         xml = doc.serialize(None, 1)
         self.log.debug("Generated XML:\n%s" % (xml))
 
         return xml
 
+    def _internal_generate_slaveimage(self, imgtuple, force=False,
+                                      create_partition=False, slave_filenames=None):
+        """
+        Internal method to generate slave diskimage.
+        """
+
+        name, (_mnt, _dev, _fs, _fmt, _sz) = imgtuple
+
+        fname = slave_filenames[name][1] #os.path.join(self.output_dir, slave_filenames[name]+'.dsk')
+#        if not force and os.access(self.jeos_filename, os.F_OK):
+#            # if we found a cached JEOS, we don't need to do anything here;
+#            # we'll copy the JEOS itself later on
+#            return
+
+        self.log.info("Generating %dGB '%s' slave diskimage for %s" % (
+                        int(_sz) / (1000**3),
+                        name, self.tdl.name))
+        self.log.info("fname = %s", (fname))
+
+        f = open(fname, "w")
+        f.truncate(int(_sz)) # size is in B (comes from TDL)
+        f.close()
+
+        if create_partition:
+            dev = parted.Device(fname)
+            disk = parted.freshDisk(dev, 'msdos')
+            constraint = parted.Constraint(device=dev)
+            geom = parted.Geometry(device=dev, start=1, end=2)
+            partition = parted.Partition(disk=disk,
+                                         type=parted.PARTITION_NORMAL,
+                                         geometry=geom)
+            disk.addPartition(partition=partition, constraint=constraint)
+            disk.commit()
+
+    def _internal_generate_slaves(self, names):
+        # disk name, (mountpoint, dev, fs, fmt, size)
+        print self.tdl.disks
+        for name in self.tdl.disks:
+#           (m, d, fs, fmt, s) = tpl
+           self._internal_generate_slaveimage((name, self.tdl.disks[name]), slave_filenames=names)
+
+    def generate_slave_images(self, names):
+        """
+        Creates disk images based on contents of
+        <storage> element in TDL.
+        @ names is for pairing disks name with img id and storage path from imgfac
+                (UUID, PATH)
+        """
+        self.slave_filenames = names
+        self.log.info('SLAVE_FILENAMES = "%s"' % (self.slave_filenames))
+        return self._internal_generate_slaves(names)
+    
     def _internal_generate_diskimage(self, size=10, force=False,
                                      create_partition=False):
         """
@@ -496,6 +575,8 @@ class Guest(object):
 
         self.log.info("Generating %dGB diskimage for %s" % (size,
                                                             self.tdl.name))
+
+        self.log.info('generate DISKIMAGE = "%s"' % (self.diskimage))
 
         directory = os.path.dirname(self.diskimage)
         filename = os.path.basename(self.diskimage)
@@ -579,7 +660,7 @@ class Guest(object):
             g_handle.part_add(devices[0], 'p', 1, 2)
             g_handle.close()
 
-    def generate_diskimage(self, size=10, force=False):
+    def generate_diskimage(self, size=10, force=False, slaves=True):
         """
         Method to generate a diskimage.  By default, a blank diskimage of
         10GB will be created; the caller can override this with the size
@@ -942,8 +1023,8 @@ class Guest(object):
             raise oz.OzException.OzException("invalid libvirt XML with no name")
         input_name = namenode[0].getContent()
         disks = input_doc.xpathEval('/domain/devices/disk')
-        if len(disks) != 1:
-            self.log.warning("Oz given a libvirt domain with more than 1 disk; using the first one parsed")
+        if len(disks) < 1:
+            raise oz.OzException.OzException("oz cannot handle a libvirt domain with less than 1 disk")
         source = disks[0].xpathEval('source')
         if len(source) != 1:
             raise oz.OzException.OzException("invalid <disk> entry without a source")
@@ -986,7 +1067,7 @@ class Guest(object):
         self.log.info("Setting up guestfs handle for %s" % (self.tdl.name))
         g = guestfs.GuestFS()
 
-        self.log.debug("Adding disk image %s" % (input_disk))
+        self.log.info("Adding disk image %s" % (input_disk))
         # NOTE: we use "add_drive_opts" here so we can specify the type
         # of the diskimage.  Otherwise it might be possible for an attacker
         # to fool libguestfs with a specially-crafted diskimage that looks
