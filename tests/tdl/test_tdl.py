@@ -90,6 +90,8 @@ tests = {
     "test-53-command-http-url.tdl": True,
     "test-54-files-file-url.tdl": True,
     "test-55-files-http-url.tdl": True,
+    "test-56-disk.tdl": False,
+    "test-57-disk-ok.tdl": True,
 }
 
 # Validate oz handling of tdl file
