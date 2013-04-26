@@ -138,6 +138,14 @@ Subsystem	sftp	/usr/libexec/openssh/sftp-server
                 """
                 if re.match("^rootpw", line):
                     return "rootpw " + self.rootpw + '\n'
+                elif re.match("^%SLAVE_DISKS%", line):
+                    newlines = ""
+                    l = reduce(lambda b, (mtpoint, dev, fsys, form, size):
+                            b + ("part %s --fstype %s --size=1 --grow\n"
+                            #b + ("part %s --ondisk=%s --fstype %s --size=1 --grow\n"
+                              % (str(mtpoint), str(fsys))),
+                            self.tdl.disks.values(), newlines)
+                    return l
                 else:
                     return line
 
